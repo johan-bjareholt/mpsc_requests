@@ -1,0 +1,6 @@
+[package]
+name = "mpsc_requests"
+description = "Like mpsc but with a response"
+version = "0.1.0"
+authors = ["Johan Bjäreholt <johan@bjareho.lt>"]
+edition = "2018"
