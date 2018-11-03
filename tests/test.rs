@@ -58,55 +58,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_fun() {
-        use std::collections::HashMap;
-        #[derive(Debug)]
-        enum Errors {
-            NoSuchPerson,
-        }
-        enum Commands {
-            CreateUser(String, u64),
-            GetUser(String)
-        }
-        #[derive(Debug)]
-        enum Responses {
-            Success(),
-            GotUser(u64)
-        }
-        let (responder, requester) = channel::<Commands, Result<Responses, Errors>>();
-        thread::spawn(move || {
-            let mut age_table : HashMap<String, u64> = HashMap::new();
-            loop {
-                responder.poll(|request| {
-                    match request {
-                        Commands::CreateUser(user, age) => {
-                            age_table.insert(user, age);
-                            Ok(Responses::Success())
-                        },
-                        Commands::GetUser(user) => {
-                            match age_table.get(&user) {
-                                Some(age) => Ok(Responses::GotUser(age.clone())),
-                                None => Err(Errors::NoSuchPerson)
-                            }
-                        }
-                    }
-                });
-            }
-        });
-        let result = requester.send_req(Commands::CreateUser(String::from("George"), 64));
-        result.unwrap();
-
-        let result = requester.send_req(Commands::GetUser(String::from("George")));
-        match result.unwrap() {
-            Responses::GotUser(age) => assert_eq!(age, 64),
-            _ => panic!("Wrong age")
-        }
-
-        let result = requester.send_req(Commands::GetUser(String::from("David")));
-        assert!(result.is_err());
-    }
-
     // Test multiple requesters on multiple threads with unique requests
     #[test]
     fn test_multiple_requesters() {
