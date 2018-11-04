@@ -9,12 +9,12 @@ mod tests {
     // Tests responding with same data as was sent
     #[test]
     fn test_echo() {
-        let (c, p) = channel::<String, String>();
+        let (responder, requester) = channel::<String, String>();
         thread::spawn(move || {
-            c.poll_loop(|req| req);
+            responder.poll_loop(|mut req| req.respond(req.body().clone()));
         });
         let msg = String::from("test");
-        let result = p.send_req(msg.clone());
+        let result = requester.request(msg.clone());
         assert_eq!(result, msg);
     }
 
@@ -23,14 +23,14 @@ mod tests {
     fn test_wordcount() {
         let (responder, requester) = channel::<String, usize>();
         thread::spawn(move || {
-            responder.poll_loop(|req| req.len());
+            responder.poll_loop(|mut req| req.respond(req.body().len()));
         });
         let msg = String::from("test");
-        let result = requester.send_req(msg.clone());
+        let result = requester.request(msg.clone());
         assert_eq!(result, 4);
 
         let msg = String::from("hello hello 123 123");
-        let result = requester.send_req(msg.clone());
+        let result = requester.request(msg.clone());
         assert_eq!(result, 19);
     }
 
@@ -41,20 +41,20 @@ mod tests {
         struct InvalidStringError;
         let (responder, requester) = channel::<String, Result<(), InvalidStringError>>();
         thread::spawn(move || {
-            responder.poll_loop(|req| {
-                if req.starts_with("http://") {
-                    Ok(())
+            responder.poll_loop(|mut req| {
+                if req.body().starts_with("http://") {
+                    req.respond(Ok(()))
                 } else {
-                    Err(InvalidStringError)
+                    req.respond(Err(InvalidStringError))
                 }
             });
         });
         let msg = String::from("http://test.com");
-        let result = requester.send_req(msg);
+        let result = requester.request(msg);
         result.unwrap();
 
         let msg = String::from("invalid string");
-        let result = requester.send_req(msg);
+        let result = requester.request(msg);
         assert!(result.is_err());
     }
 
@@ -70,7 +70,7 @@ mod tests {
 
         let (responder, requester) = channel::<String, String>();
         thread::spawn(move || {
-            responder.poll_loop(|req| req);
+            responder.poll_loop(|mut req| req.respond(req.body().clone()));
         });
 
         fn request_fn(requester: Requester<String, String>, ti: usize, atomic_counter: Arc<AtomicUsize>) {
@@ -78,7 +78,7 @@ mod tests {
             thread::park();
             for i in 0..N_REQUESTS_PER_THREAD {
                 let msg = format!("message from thread {} iteration {}", ti, i);
-                let result = requester.send_req(msg.clone());
+                let result = requester.request(msg.clone());
                 assert_eq!(result, msg);
             }
             atomic_counter.fetch_sub(1, Ordering::Acquire);

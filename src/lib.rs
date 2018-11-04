@@ -1,14 +1,19 @@
 //! mpsc_requests is a small library built on top of std::sync::mpsc but with
 //! the addition of the consumer responding with a message to the producer.
 //! Since the producer no longer only produces and the consumer no longer only consumes, the
-//! producer is renamed to requester and the consumer is renamed to responder.
+//! Producer is renamed to [Requester] and the Consumer is renamed to [Responder].
 //!
 //! mpsc_requests is small and lean by only building on top of the rust standard library
 //!
 //! A perfect use-case for this library is single-threaded databases which need
 //! to be accessed from multiple threads (such as SQLite)
 //!
-//! # Echo example
+//! # Examples
+//! For more examples, see the examples directory
+//!
+//! For even more examples see the tests in the tests directory
+//!
+//! ## Simple echo example
 //! ```rust,run
 //! use std::thread;
 //! use mpsc_requests::channel;
@@ -17,73 +22,22 @@
 //! type ResponseType = String;
 //! let (responder, requester) = channel::<RequestType, ResponseType>();
 //! thread::spawn(move || {
-//!     responder.poll_loop(|req| req);
+//!     responder.poll_loop(|mut req| {
+//!         req.respond(req.body().clone());
+//!     });
 //! });
 //! let msg = String::from("Hello");
-//! let res = requester.send_req(msg.clone());
+//! let res = requester.request(msg.clone());
 //! assert_eq!(res, msg);
-//! ```
-//! # Database example
-//! ```rust,run
-//! use std::thread;
-//! use std::collections::HashMap;
-//! use mpsc_requests::channel;
-//! #[derive(Debug)]
-//! enum Errors {
-//!     NoSuchPerson,
-//! }
-//! enum Commands {
-//!     CreateUser(String, u64),
-//!     GetUser(String)
-//! }
-//! #[derive(Debug)]
-//! enum Responses {
-//!     Success(),
-//!     GotUser(u64)
-//! }
-//! let (responder, requester) = channel::<Commands, Result<Responses, Errors>>();
-//! thread::spawn(move || {
-//!     let mut age_table : HashMap<String, u64> = HashMap::new();
-//!     loop {
-//!         responder.poll(|request| {
-//!             match request {
-//!                 Commands::CreateUser(user, age) => {
-//!                     age_table.insert(user, age);
-//!                     Ok(Responses::Success())
-//!                 },
-//!                 Commands::GetUser(user) => {
-//!                     match age_table.get(&user) {
-//!                         Some(age) => Ok(Responses::GotUser(age.clone())),
-//!                         None => Err(Errors::NoSuchPerson)
-//!                     }
-//!                 }
-//!             }
-//!         });
-//!     }
-//! });
-//!
-//! // Create user
-//! let username = String::from("George");
-//! requester.send_req(Commands::CreateUser(username.clone(), 64)).unwrap();
-//! // Fetch user and verify data
-//! let command = Commands::GetUser(username.clone());
-//! match requester.send_req(command).unwrap() {
-//!     Responses::GotUser(age) => assert_eq!(age, 64),
-//!     _ => panic!("Wrong age")
-//! }
-//! // Try to fetch non-existing user
-//! let username = String::from("David");
-//! let command = Commands::GetUser(username);
-//! let result = requester.send_req(command);
-//! assert!(result.is_err());
 //! ```
 
 #![deny(missing_docs)]
 
 use std::sync::mpsc;
 
-/// Create a channel between one requester and one responder.
-/// The requester can be cloned to be able to do requests to the same responder from multiple
+/// Create a [Requester] and a [Responder] with a channel between them
+///
+/// The [Requester] can be cloned to be able to do requests to the same [Responder] from multiple
 /// threads.
 pub fn channel<Req, Res>() -> (Responder<Req, Res>, Requester<Req, Res>) {
     let (request_sender, request_receiver) = mpsc::channel::<Request<Req, Res>>();
@@ -94,11 +48,11 @@ pub fn channel<Req, Res>() -> (Responder<Req, Res>, Requester<Req, Res>) {
 }
 
 #[derive(Debug)]
-/// Errors which can occur when a responder handles a request
+/// Errors which can occur when a [Responder] handles a request
 pub enum RequestError {
-    /// Error occuring when channel from requester to sender is broken
+    /// Error occuring when channel from [Requester] to [Responder] is broken
     RecvError,
-    /// Error occuring when channel from sender to requester is broken
+    /// Error occuring when channel from [Responder] to [Requester] is broken
     SendError
 }
 impl From<mpsc::RecvError> for RequestError {
@@ -112,12 +66,54 @@ impl<T> From<mpsc::SendError<T>> for RequestError {
     }
 }
 
-struct Request<Req, Res> {
+/// A object expected tois a request which is received from the [Responder] poll method
+///
+/// The request body can be obtained from the body() function and before being
+/// dropped it needs to send a response with the respond() function.
+/// Not doing a response on a request is considered a programmer error and will result in a panic
+/// when the object gets dropped
+pub struct Request<Req, Res> {
     request: Req,
-    response_sender: mpsc::Sender<Res>
+    response_sender: mpsc::Sender<Res>,
+    _responded: bool
 }
 
-/// A responder listens to requests of a specific type and responds back to the requester
+impl<Req, Res> Request<Req, Res> {
+    fn new(request: Req, response_sender: mpsc::Sender<Res>) -> Request<Req, Res> {
+        Request {
+            request: request,
+            response_sender: response_sender,
+            _responded: false,
+        }
+    }
+
+    /// Get actual request data
+    pub fn body(&self) -> &Req {
+        &self.request
+    }
+
+    /// TODO
+    pub fn respond(&mut self, response: Res) {
+        if self._responded {
+            panic!("Programmer error, same request cannot respond twice!");
+        }
+        match self.response_sender.send(response) {
+            Ok(_) => (),
+            Err(_e) => panic!("Request failed, send pipe was broken during request!")
+        }
+        self._responded = true;
+    }
+}
+
+impl<Req, Res> Drop for Request<Req, Res> {
+    fn drop(&mut self) {
+        if !self._responded {
+            panic!("Dropped request without responding, programmer error!");
+        }
+    }
+}
+
+/// A [Responder] listens to requests of a specific type and responds back to the [Requester]
 pub struct Responder<Req, Res> {
     request_receiver: mpsc::Receiver<Request<Req, Res>>,
 }
@@ -129,30 +125,36 @@ impl<Req, Res> Responder<Req, Res> {
         }
     }
 
-    /// Poll is the consumption function in the Responder which takes a request, handles it and
-    /// sends a response back to the Requester
-    pub fn poll<F>(&self, f: F) -> Result<(), RequestError> where F: FnOnce(Req) -> Res {
-        let request = self.request_receiver.recv()?;
-        let response = f(request.request);
-        Ok(request.response_sender.send(response)?)
+    /// Poll if the [Responder] has received any requests.
+    /// It then returns a Request which you need to call respond() on before dropping.
+    /// Not calling respond is considered a programmer error and will result in a panic
+    ///
+    /// This call is blocking
+    /// TODO: add try_poll
+    pub fn poll(&self) -> Result<Request<Req, Res>, RequestError> {
+        match self.request_receiver.recv() {
+            Ok(r) => Ok(r),
+            Err(_e) => Err(RequestError::RecvError)
+        }
     }
 
-    /// A shorthand for running poll with a closure for as long as there are any Requesters alive
-    pub fn poll_loop(&self, f: fn(Req) -> Res) {
+    /// A shorthand for running poll with a closure for as long as there is one or more [Requester]s alive
+    /// referencing this [Responder]
+    pub fn poll_loop<F>(&self, mut f: F) where F: FnMut(Request<Req, Res>) {
         loop {
-            match self.poll(f){
-                Ok(_) => (),
+            match self.poll() {
+                Ok(request) => f(request),
                 Err(e) => match e {
                     // No more send channels open, quitting
                     RequestError::RecvError => break,
-                    RequestError::SendError => panic!("Request failed, send pipe was broken during request!")
+                    _ => panic!("This is a bug")
                 }
-            }
+            };
         }
     }
 }
 
-/// Requester has a connection to a Responder which it can send requests to
+/// [Requester] has a connection to a [Responder] which it can send requests to
 #[derive(Clone)]
 pub struct Requester<Req, Res> {
     request_sender: mpsc::Sender<Request<Req, Res>>,
@@ -165,13 +167,10 @@ impl<Req, Res> Requester<Req, Res> {
         }
     }
 
-    /// Send request to the connected Responder
-    pub fn send_req(&self, req: Req) -> Res {
+    /// Send request to the connected [Responder]
+    pub fn request(&self, request: Req) -> Res {
         let (response_sender, response_receiver) = mpsc::channel::<Res>();
-        let full_request = Request {
-            request: req,
-            response_sender: response_sender
-        };
+        let full_request = Request::new(request, response_sender);
         self.request_sender.send(full_request).unwrap();
         response_receiver.recv().unwrap()
     }
