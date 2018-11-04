@@ -1,7 +1,7 @@
 [package]
 name = "mpsc_requests"
 description = "Like mpsc but with a response"
-version = "0.1.0"
+version = "0.2.0"
 license = "GPL-3.0-only"
 authors = ["Johan Bjäreholt <johan@bjareho.lt>"]
 edition = "2018"
